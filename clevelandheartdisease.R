@@ -13,6 +13,7 @@ library(stringr)
 library(VIM)
 library(mice)
 library(psych)
+library(gmodels)
 
 #################################################
 ## Define functions
@@ -85,6 +86,29 @@ NumLowOut <-
     Q1 <- quantile(x, probs = 0.25)
     Q1minusIQR1.5 <- Q1 - IQR1.5
     sum(x < Q1minusIQR1.5)
+  }
+
+uniqueVals <-
+  function(x) {
+    as.numeric(length(unique(x)))
+  }
+
+buildCrossTab <-
+  function(x) {
+    CrossTable(categoricals$num, x, prop.r = TRUE, prop.c = TRUE)
+  }
+
+kendallsCorr <-
+  function(x) {
+    ct <- cor.test(categoricals$num, x, method = "kendall", alternative = "two.sided")
+    print(ct)
+    p <- ct$p.value
+    if(p < 0.05) {
+      print("Significant p-value")
+    } else {
+      print("Insignificant p-value")
+    }
+    
   }
 
 #################################################
@@ -162,6 +186,29 @@ qqnorm(y = numerics$ca, distribution = qnorm, probs = c(0.25, 0.75),
 qqline(y = numerics$ca, distribution = qnorm, 
        probs = c(0.25, 0.75), qtype = 7)
 
-noquote(multi.sapply(categoricals, uniqueN, FindMode, ModePct))
+noquote(multi.sapply(categoricals, uniqueVals, FindMode, ModePct))
 
+buildCrossTab(categoricals$sex)
+buildCrossTab(categoricals$cp)
+buildCrossTab(categoricals$fbs)
+buildCrossTab(categoricals$restecg)
+buildCrossTab(categoricals$exang)
+buildCrossTab(categoricals$slope)
+buildCrossTab(categoricals$thal)
 
+cor(completedData, method = "spearman", use = "complete.obs")
+
+print("Kendall's corr for num/sex:")
+kendallsCorr(categoricals$sex)
+print("Kendall's corr for num/cp:")
+kendallsCorr(categoricals$cp)
+print("Kendall's corr for num/fbs:")
+kendallsCorr(categoricals$fbs)
+print("Kendall's corr for num/restecg:")
+kendallsCorr(categoricals$restecg)
+print("Kendall's corr for num/exang:")
+kendallsCorr(categoricals$exang)
+print("Kendall's corr for num/slope")
+kendallsCorr(categoricals$slope)
+print("Kendall's corr for num/slope")
+kendallsCorr(categoricals$thal)
