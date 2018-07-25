@@ -10,10 +10,14 @@
 library(data.table)
 library(Hmisc)
 library(stringr)
+library(e1071)
 library(VIM)
 library(mice)
 library(psych)
 library(gmodels)
+library(cluster)
+library(factoextra)
+library(RANN)
 
 #################################################
 ## Define functions
@@ -104,9 +108,9 @@ kendallsCorr <-
     print(ct)
     p <- ct$p.value
     if(p < 0.05) {
-      print("Significant p-value")
+      print("Significant p-value: reject null hypothesis")
     } else {
-      print("Insignificant p-value")
+      print("Insignificant p-value: fail to reject null hypothesis")
     }
     
   }
@@ -185,6 +189,7 @@ qqnorm(y = numerics$ca, distribution = qnorm, probs = c(0.25, 0.75),
        qtype = 7, main = "Normal Q-Q plot: ca")
 qqline(y = numerics$ca, distribution = qnorm, 
        probs = c(0.25, 0.75), qtype = 7)
+par(mfrow=c(1,1))
 
 noquote(multi.sapply(categoricals, uniqueVals, FindMode, ModePct))
 
@@ -212,3 +217,108 @@ print("Kendall's corr for num/slope")
 kendallsCorr(categoricals$slope)
 print("Kendall's corr for num/slope")
 kendallsCorr(categoricals$thal)
+
+## Transformations
+
+completedData$logtrestbps <- log(completedData$trestbps)
+completedData$logchol <- log(completedData$chol)
+
+dropvars <- names(completedData) %in% c("trestbps", "chol")
+transformedData <- completedData[!dropvars]
+
+##########################################################################
+## Single and multiple linear regression
+##########################################################################
+
+## Simple regression: num/age
+## Expected to produce terrible results; 
+## violates regression assumptions and inappropriate for dependent var.
+simplin <- lm(formula = num ~ age, data = transformedData)
+summary(simplin)
+str(simplin)
+summary(simplin)$r.squared
+
+plot(num ~ age, data=transformedData,
+     main='Simple linear regression')
+abline(simplin, col="orange")
+
+plot(simplin$fitted.values,
+     simplin$residuals,
+     xlab='Fitted values',
+     ylab='Residuals',
+     main='Simple linear regression: residuals ~ fitted values')
+abline(h=0, col="orange")
+
+plot(simplin$residuals, ylab='Residuals', 
+     main='Simple linear regression: residual plot')
+abline(h=0, col='orange')
+
+hist(simplin$residuals)
+shapiro.test(simplin$residuals)
+qqnorm(simplin$residuals, ylab='Residuals',
+       main='Simple linear model: residuals Q-Q plot')
+qqline(simplin$residuals, col='orange')
+
+## Multiple linear regression: num target, all predictors
+## Also expected to be terrible fit, for similar reasons.
+
+multlin <- lm(num ~ .,
+              data=transformedData)
+summary(multlin)
+str(multlin)
+summary(multlin)$r.squared
+
+plot(multlin$fitted.values, multlin$residuals,
+     xlab='Fitted values', ylab='Residuals',
+     main='Multiple linear regression: residuals ~ fitted values')
+abline(h=0, col='darkblue')
+
+plot(multlin$residuals, ylab='Residuals',
+     main='Multiple linear regression: residual plot')
+abline(h=0, col='darkblue')
+
+hist(multlin$residuals)
+shapiro.test(multlin$residuals)
+qqnorm(multlin$residuals, ylab='Residuals',
+       main='Multiple linear regression: residuals Q-Q plot')
+
+## Poisson
+
+pois <- glm(num ~ ., family="poisson", data=transformedData)
+summary(pois)
+
+
+
+##########################################################################
+## Dimensionality reduction techniques
+##########################################################################
+
+## Principal components analysis
+
+
+##########################################################################
+## Clustering analysis
+##########################################################################
+
+## Could see up to five clusters. 'Num' attribute is integer-valued
+## from 0-4, with 1-4 having heart disease and 0 not. Another potential
+## outcome is two clusters, lumping together the 1-4 values to create 
+## a 1 cluster, and a 0 cluster. Differences between patients with 
+## heart disease at level 1 and zero may be slight.
+
+## RANN
+
+## k-means
+set.seed(1)
+unlabeled <- subset(completedData, select = -num)
+matrix = as.matrix(unlabeled)
+k.max <- 5
+wss <- sapply(1:k.max, 
+              function(k){
+                kmeans(matrix, k, nstart=50, iter.max=20)$tot.withinss})
+plot(1:k.max, wss, type="b", pch=19, frame=FALSE,
+     xlab="Total number of clusters",
+     ylab="Total within-cluster sum of squares")
+kmcluster <- kmeans(matrix, 2, nstart=50)
+plot(unlabeled, col=(c("lightblue", "lightsalmon"))[kmcluster$cluster],
+     main="K-means clustering with two clusters", pch=20, cex=2)
