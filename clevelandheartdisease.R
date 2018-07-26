@@ -17,7 +17,10 @@ library(psych)
 library(gmodels)
 library(cluster)
 library(factoextra)
+library(glmnet)
+library(caret)
 library(RANN)
+library(MASS)
 
 #################################################
 ## Define functions
@@ -227,6 +230,12 @@ dropvars <- names(completedData) %in% c("trestbps", "chol")
 transformedData <- completedData[!dropvars]
 
 ##########################################################################
+## Assessing endogeneity and collinearity
+##########################################################################
+
+
+
+##########################################################################
 ## Single and multiple linear regression
 ##########################################################################
 
@@ -282,11 +291,31 @@ shapiro.test(multlin$residuals)
 qqnorm(multlin$residuals, ylab='Residuals',
        main='Multiple linear regression: residuals Q-Q plot')
 
+multlin$coefficients
+confint(multlin, level = 0.95)
+
 ## Poisson
 
 pois <- glm(num ~ ., family="poisson", data=transformedData)
 summary(pois)
 
+## Automated feature selection: forward
+forselect <- stepAIC(multlin,
+                     data = transformedData,
+                     direction = 'forward')
+forselect$anova
+
+## Automated feature selection: backward
+backselect <- stepAIC(multlin,
+                      data = transformedData,
+                      direction = 'backward')
+backselect$anova
+
+## Automated feature selection: stepwise
+stepselect <- stepAIC(multlin,
+                      data = transformedData,
+                      direction = 'both')
+stepselect$anova
 
 
 ##########################################################################
@@ -294,6 +323,67 @@ summary(pois)
 ##########################################################################
 
 ## Principal components analysis
+
+## Lasso
+mlasso <- cv.glmnet(
+  as.matrix(transformedData[,-12],),
+  as.matrix(transformedData[,12]),
+  family='gaussian',
+  type.measure= 'mse',
+  nfold = 5,
+  alpha = 1
+)
+
+plot(x=mlasso, main="Regularized regression: lasso")
+mlasso$lambda.min
+log(mlasso$lambda.min)
+mlasso$lambda.1se
+log(mlasso$lambda.1se)
+
+coef(object = mlasso, lambda = 'lambda.1se')
+
+## Ridge regression
+mridge <- cv.glmnet(
+  x = as.matrix(transformedData[,-12]),
+  y = as.matrix(transformedData[,12]),
+  family = 'gaussian',
+  type.measure = 'mse',
+  nfold = 5,
+  alpha = 0
+)
+
+plot(x = mridge, main="Regularized regression: ridge")
+
+mridge$lambda.min
+log(mridge$lambda.min)
+mridge$lambda.1se
+log(mridge$lambda.1se)
+
+coef(mridge, lambda = 'lambda.1se')
+
+## Elastic net
+menet <- cv.glmnet(
+  as.matrix(transformedData[,-12]),
+  as.matrix(transformedData[,12]),
+  family = 'gaussian',
+  type.measure = 'mse',
+  nfold = 5,
+  alpha = 0.5
+)
+
+plot(x = menet, main = "Regularized regression: elastic net")
+
+menet$lambda.min
+log(menet$lambda.min)
+menet$lambda.1se
+log(menet$lambda.1se)
+
+coef(menet, lambda = 'lambda.1se')
+
+##########################################################################
+## Multivariate regression
+##########################################################################
+
 
 
 ##########################################################################
