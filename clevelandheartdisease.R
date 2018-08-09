@@ -85,6 +85,15 @@ NumUpOut <-
     sum(x > Q3plusIQR1.5)
   }
 
+UpOutCutoff <-
+  function(x) {
+    IQR_val <- IQR(x)
+    IQR1.5 <- 1.5*IQR_val
+    Q3 <- quantile(x, probs = 0.75)
+    Q3plusIQR1.5 <- Q3 + IQR1.5
+  }
+
+
 ## NumLowOut: Identify number of outliers below Q1 - (1.5*IQR)
 NumLowOut <-
   function(x) {
@@ -93,6 +102,14 @@ NumLowOut <-
     Q1 <- quantile(x, probs = 0.25)
     Q1minusIQR1.5 <- Q1 - IQR1.5
     sum(x < Q1minusIQR1.5)
+  }
+
+LowOutCutoff <-
+  function(x) {
+    IQR_val <- IQR(x)
+    IQR1.5 <- 1.5*IQR_val
+    Q1 <- quantile(x, probs = 0.25)
+    Q1minusIQR1.5 <- Q1 - IQR1.5
   }
 
 uniqueVals <-
@@ -134,24 +151,34 @@ cleveland$thal <- as.numeric(cleveland$thal)
 cleveland$ca <- str_replace(cleveland$ca, '.0', '')
 cleveland$ca <- as.numeric(cleveland$ca)
 
+##########################################################################
+## Create training and testing datasets
+##########################################################################
+set.seed(1)
+
+bound <- floor((nrow(cleveland)/4)*3)
+cleveland <- cleveland[sample(nrow(cleveland)), ]
+td.train <- cleveland[1:bound, ]
+td.test <- cleveland[(bound+1):nrow(cleveland), ]
+
 ## Data profiling
 ## Descriptions: http://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/heart-disease.names
 ## Categoricals: sex, cp, fbs, restecg, exang, slope, thal, num
 ## Numerics: age, trestbps, chol, thalach, oldpeak, ca
-str(cleveland)
-hist.data.frame(cleveland)
-describe(cleveland)
+str(td.train)
+hist.data.frame(td.train)
+describe(td.train)
 
 ## Examine missing data
-aggr_plot <- aggr(cleveland, col=c('navyblue', 'lightsalmon'), numbers=TRUE,
-                  sortVars=TRUE, labels=names(cleveland),
+aggr_plot <- aggr(td.train, col=c('navyblue', 'lightsalmon'), numbers=TRUE,
+                  sortVars=TRUE, labels=names(td.train),
                   cex.axis=0.7, gap=3, 
                   ylab=c("Histogram of missing data", "Pattern"))
-incompletes <- ic(cleveland)
+incompletes <- ic(td.train)
 View(incompletes)
 
 ## Experiment with mice for imputing missing values
-tempData <- mice(cleveland, m=5, maxit=50, meth='cart', seed=500)
+tempData <- mice(td.train, m=5, maxit=50, meth='cart', seed=500)
 stripplot(tempData, pch=20, cex=1.2)
 completedData <- complete(tempData, 1)
 
@@ -166,7 +193,7 @@ numerics <- subset(completedData, select=numvars)
 
 ## Data profiling on completed data
 noquote(multi.sapply(numerics, min, mean, max, FindMode, ModePct, sd, rms, IQR,
-                     NumUpOut, NumLowOut, skew, kurtosis))
+                     NumUpOut, UpOutCutoff, NumLowOut, LowOutCutoff, skew, kurtosis))
 
 par(mfrow = c(3, 2))
 qqnorm(y = numerics$age, distribution = qnorm, probs = c(0.25, 0.75), 
@@ -221,6 +248,20 @@ kendallsCorr(categoricals$slope)
 print("Kendall's corr for num/slope")
 kendallsCorr(categoricals$thal)
 
+
+
+##########################################################################
+## Data modifications
+##########################################################################
+
+## Outlier management: truncate at min/max usual value
+## Not including ca, because it is obviously not continuous.
+completedData$age[completedData$age < 30] <- 30
+completedData$trestbps[completedData$trestbps > 170] <- 170
+completedData$chol[completedData$chol > 367] <- 367
+completedData$thalach[completedData$thalach < 89] <- 89
+completeData$oldpeak[completedData$oldpeak > 4.5] <- 4.5
+
 ## Transformations
 
 completedData$logtrestbps <- log(completedData$trestbps)
@@ -228,6 +269,8 @@ completedData$logchol <- log(completedData$chol)
 
 dropvars <- names(completedData) %in% c("trestbps", "chol")
 transformedData <- completedData[!dropvars]
+
+
 
 ##########################################################################
 ## Assessing endogeneity and collinearity
@@ -290,6 +333,7 @@ hist(multlin$residuals)
 shapiro.test(multlin$residuals)
 qqnorm(multlin$residuals, ylab='Residuals',
        main='Multiple linear regression: residuals Q-Q plot')
+qqline(multlin$residuals, col='darkblue')
 
 multlin$coefficients
 confint(multlin, level = 0.95)
@@ -298,6 +342,7 @@ confint(multlin, level = 0.95)
 
 pois <- glm(num ~ ., family="poisson", data=transformedData)
 summary(pois)
+
 
 ## Automated feature selection: forward
 forselect <- stepAIC(multlin,
@@ -400,7 +445,7 @@ coef(menet, lambda = 'lambda.1se')
 
 ## k-means
 set.seed(1)
-unlabeled <- subset(completedData, select = -num)
+unlabeled <- subset(transformedData, select = -num)
 matrix = as.matrix(unlabeled)
 k.max <- 5
 wss <- sapply(1:k.max, 
