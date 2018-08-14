@@ -9,9 +9,12 @@
 #################################################
 library(data.table)
 library(Hmisc)
+library(np)
+library(earth)
 library(stringr)
 library(e1071)
 library(VIM)
+library(car)
 library(mice)
 library(psych)
 library(gmodels)
@@ -427,9 +430,73 @@ coef(menet, lambda = 'lambda.1se')
 
 ##########################################################################
 ## Multivariate regression
+## Source: Marc Paradis, 3.5.1 Multivariate Linear Regression
+## and http://dwoll.de/rexrepos/posts/multRegression.html#TOC
 ##########################################################################
 
+## Variables are low ordinals, not really suitable for LR.
+TgtMvLR <- lm(cbind(cp, num) ~ ., data = transformedData)
+summary(TgtMvLR)
 
+summary(
+  manova(TgtMvLR), 
+  test = 'Hotelling-Lawley'
+)
+
+summary(
+  manova(TgtMvLR), 
+  test = 'Wilks'
+)
+
+summary(
+  manova(TgtMvLR), 
+  test = 'Roy'
+)
+
+summary(
+  manova(TgtMvLR), 
+  test = 'Pillai'
+)
+
+Manova(
+  TgtMvLR, 
+  type = 'II'
+)
+
+Manova(
+  TgtMvLR, 
+  type = 'III'
+)
+
+##########################################################################
+## Non-parametric regression
+## Source: Marc Paradis, 3.6.1s nonparametric_regression v20180618a.r
+##########################################################################
+
+npfit <- npreg(
+  txdat = transformedData$ca,
+  tydat = transformedData$num,
+  residual = T
+)
+summary(npfit)
+
+plot(
+  x = transformedData$ca, 
+  y = transformedData$num
+)
+lines(
+  x = transformedData$ca, 
+  y = fitted(npfit), 
+  col = 'purple', 
+  lwd = 2      
+)
+
+qqnorm(npfit$resid)
+qqline(
+  npfit$resid, 
+  lwd = 2,     
+  col = 'purple'
+)
 
 ##########################################################################
 ## Clustering analysis
