@@ -18,6 +18,7 @@ library(car)
 library(mice)
 library(psych)
 library(gmodels)
+library(clv)
 library(cluster)
 library(factoextra)
 library(glmnet)
@@ -28,7 +29,10 @@ library(faraway)
 library(rpart)
 library(rpart.plot)
 library(randomForest)
-library(Rborist)
+library(fpc)
+library(plm)
+library(systemfit)
+
 
 #################################################
 ## Define functions
@@ -142,6 +146,9 @@ kendallsCorr <-
     }
     
   }
+
+
+
 
 #################################################
 ## EDA
@@ -285,7 +292,7 @@ aggr_plot <- aggr(td.test, col=c('navyblue', 'lightsalmon'), numbers=TRUE,
                   sortVars=TRUE, labels=names(td.test),
                   cex.axis=0.7, gap=3, 
                   ylab=c("Histogram of missing data", "Pattern"))
-incompletes <- ic(td.test)
+incompletetest <- ic(td.test)
 
 tempTest <- mice(td.test, m=5, maxit=50, meth='cart', seed=500)
 stripplot(tempTest, pch=20, cex=1.2)
@@ -305,276 +312,29 @@ dropvarstest <- names(completedTest) %in% c("trestbps", "chol")
 transformedTest <- completedTest[!dropvarstest]
 
 ##########################################################################
-## Assessing endogeneity and collinearity
+## Assessing endogeneity and collinearity, training set
 ##########################################################################
 
+## Run linear regression and view residuals.
+## There should be no discernible pattern in the residuals,
+## and no correlation of the residuals with the predictors.
 
+linreg <- lm(num ~ ., data = transformedData)
+summary(linreg)
 
-##########################################################################
-## Single and multiple linear regression
-##########################################################################
+linreg.res <- resid(linreg)
+plot(linreg.res)
+cor(linreg.res, transformedData)
 
-## Simple regression: num/age
-## Expected to produce terrible results; 
-## violates regression assumptions and inappropriate for dependent var.
-simplin <- lm(formula = num ~ age, data = transformedData)
-summary(simplin)
-str(simplin)
-summary(simplin)$r.squared
-
-plot(num ~ age, data=transformedData,
-     main='Simple linear regression')
-abline(simplin, col="orange")
-
-plot(simplin$fitted.values,
-     simplin$residuals,
-     xlab='Fitted values',
-     ylab='Residuals',
-     main='Simple linear regression: residuals ~ fitted values')
-abline(h=0, col="orange")
-
-plot(simplin$residuals, ylab='Residuals', 
-     main='Simple linear regression: residual plot')
-abline(h=0, col='orange')
-
-hist(simplin$residuals)
-shapiro.test(simplin$residuals)
-qqnorm(simplin$residuals, ylab='Residuals',
-       main='Simple linear model: residuals Q-Q plot')
-qqline(simplin$residuals, col='orange')
-
-## Multiple linear regression: num target, all predictors
-## Also expected to be terrible fit, for similar reasons.
-
-multlin <- lm(num ~ .,
-              data=transformedData)
-summary(multlin)
-str(multlin)
-summary(multlin)$r.squared
-
-plot(multlin$fitted.values, multlin$residuals,
-     xlab='Fitted values', ylab='Residuals',
-     main='Multiple linear regression: residuals ~ fitted values')
-abline(h=0, col='darkblue')
-
-plot(multlin$residuals, ylab='Residuals',
-     main='Multiple linear regression: residual plot')
-abline(h=0, col='darkblue')
-
-hist(multlin$residuals)
-shapiro.test(multlin$residuals)
-qqnorm(multlin$residuals, ylab='Residuals',
-       main='Multiple linear regression: residuals Q-Q plot')
-qqline(multlin$residuals, col='darkblue')
-
-multlin$coefficients
-confint(multlin, level = 0.95)
-
-## Poisson
-
-pois <- glm(num ~ ., family="poisson", data=transformedData)
-summary(pois)
-
-
-## Automated feature selection: forward
-forselect <- stepAIC(multlin,
-                     data = transformedData,
-                     direction = 'forward')
-forselect$anova
-
-## Automated feature selection: backward
-backselect <- stepAIC(multlin,
-                      data = transformedData,
-                      direction = 'backward')
-backselect$anova
-
-## Automated feature selection: stepwise
-stepselect <- stepAIC(multlin,
-                      data = transformedData,
-                      direction = 'both')
-stepselect$anova
-
-
-##########################################################################
-## Dimensionality reduction techniques
-##########################################################################
-
-## Principal components analysis
-
-## Lasso
-mlasso <- cv.glmnet(
-  as.matrix(transformedData[,-12],),
-  as.matrix(transformedData[,12]),
-  family='gaussian',
-  type.measure= 'mse',
-  nfold = 5,
-  alpha = 1
-)
-
-plot(x=mlasso, main="Regularized regression: lasso")
-mlasso$lambda.min
-log(mlasso$lambda.min)
-mlasso$lambda.1se
-log(mlasso$lambda.1se)
-
-coef(object = mlasso, lambda = 'lambda.1se')
-
-## Ridge regression
-mridge <- cv.glmnet(
-  x = as.matrix(transformedData[,-12]),
-  y = as.matrix(transformedData[,12]),
-  family = 'gaussian',
-  type.measure = 'mse',
-  nfold = 5,
-  alpha = 0
-)
-
-plot(x = mridge, main="Regularized regression: ridge")
-
-mridge$lambda.min
-log(mridge$lambda.min)
-mridge$lambda.1se
-log(mridge$lambda.1se)
-
-coef(mridge, lambda = 'lambda.1se')
-
-## Elastic net
-menet <- cv.glmnet(
-  as.matrix(transformedData[,-12]),
-  as.matrix(transformedData[,12]),
-  family = 'gaussian',
-  type.measure = 'mse',
-  nfold = 5,
-  alpha = 0.5
-)
-
-plot(x = menet, main = "Regularized regression: elastic net")
-
-menet$lambda.min
-log(menet$lambda.min)
-menet$lambda.1se
-log(menet$lambda.1se)
-
-coef(menet, lambda = 'lambda.1se')
-
-##########################################################################
-## Multivariate regression
-## Source: Marc Paradis, 3.5.1 Multivariate Linear Regression
-## and http://dwoll.de/rexrepos/posts/multRegression.html#TOC
-##########################################################################
-
-## Variables are low ordinals, not really suitable for LR.
-TgtMvLR <- lm(cbind(cp, num) ~ ., data = transformedData)
-summary(TgtMvLR)
-
-summary(
-  manova(TgtMvLR), 
-  test = 'Hotelling-Lawley'
-)
-
-summary(
-  manova(TgtMvLR), 
-  test = 'Wilks'
-)
-
-summary(
-  manova(TgtMvLR), 
-  test = 'Roy'
-)
-
-summary(
-  manova(TgtMvLR), 
-  test = 'Pillai'
-)
-
-Manova(
-  TgtMvLR, 
-  type = 'II'
-)
-
-Manova(
-  TgtMvLR, 
-  type = 'III'
-)
-
-##########################################################################
-## Non-parametric regression
-## Source: Marc Paradis, 3.6.1s nonparametric_regression v20180618a.r
-##########################################################################
-
-npfit <- npreg(
-  txdat = transformedData$ca,
-  tydat = transformedData$num,
-  residual = T
-)
-summary(npfit)
-
-plot(
-  x = transformedData$ca, 
-  y = transformedData$num
-)
-lines(
-  x = transformedData$ca, 
-  y = fitted(npfit), 
-  col = 'purple', 
-  lwd = 2      
-)
-
-qqnorm(npfit$resid)
-qqline(
-  npfit$resid, 
-  lwd = 2,     
-  col = 'purple'
-)
-
-## Full data set
-fit.fs <- 
-  lm(
-    num ~ ., 
-    data = transformedData
-  )
-
-summary(fit.fs)
-
-qqnorm(fit.fs$residuals)
-qqline(fit.fs$residuals)
-
-## Kernel regression
-fit.kernel <- 
-  npreg(
-    tydat = transformedData$num, 
-    txdat = transformedData[, -12], 
-    regtype = 'll', 
-    residual = T
-  )	
-
-summary(fit.kernel)
-
-plot( 
-  fit.kernel, 
-  plot.errors.method = 'bootstrap'
-)
-
-## MARS
-fit.mars <- 
-  earth(
-    num ~ ., 
-    data = transformedData, 
-    nfold = 5
-  )
-
-plot(fit.mars)
-summary(fit.mars)
-
-var.imp <- 
-  evimp(fit.mars)
-var.imp
-
-plot(var.imp)
-
+vif(linreg)
 
 ##########################################################################
 ## Classification
+## 'Num' attribute is integer-valued
+## from 0-4, with 1-4 having heart disease and 0 not. Another potential
+## outcome is two clusters, lumping together the 1-4 values to create 
+## a 1 cluster, and a 0 cluster. Differences between patients with 
+## heart disease at original level 1 and zero may be slight.
 ## Source: Marc Paradis, 3.7.1s glm_example v20180618.r
 ##########################################################################
 
@@ -597,28 +357,22 @@ binglm <-
   )
 
 summary(binglm)
-anova(binglm)
 
-pchisq( ## Very small p-value indicates a poor fit.
-  summary(binglm)$deviance,  
-  summary(binglm)$df.residual
-)
-
-preds.binglm <- 
+probs.binglm <- 
   predict(
     binglm, 
     newdata = ttDTdf, 
     type = 'response'
   )
 
-str(preds.binglm)
-head(preds.binglm)
-summary(preds.binglm)
+str(probs.binglm)
+head(probs.binglm)
+summary(probs.binglm)
 
-plot(preds.binglm)
-plot(sort(preds.binglm))
+plot(probs.binglm)
+plot(sort(probs.binglm))
 
-preds.binglm.se <- 
+probs.binglm.se <- 
   predict(
     binglm, 
     newdata = ttDTdf, 
@@ -627,9 +381,15 @@ preds.binglm.se <-
   )$se.fit
 
 plot(
-  preds.binglm, 
-  preds.binglm.se
+  probs.binglm, 
+  probs.binglm.se
 )
+
+## Confusion matrix
+binglm.pred.2 = rep("0", 76)
+binglm.pred.2[probs.binglm > .5] = "1"
+table(binglm.pred.2, ttDT$num)
+
 
 ## GLM with original target variable
 poisglm <- 
@@ -671,191 +431,6 @@ plot(
   predpois.se
 )
 
-##########################################################################
-## Clustering analysis
-##########################################################################
-
-## Could see up to five clusters. 'Num' attribute is integer-valued
-## from 0-4, with 1-4 having heart disease and 0 not. Another potential
-## outcome is two clusters, lumping together the 1-4 values to create 
-## a 1 cluster, and a 0 cluster. Differences between patients with 
-## heart disease at level 1 and zero may be slight.
-
-## RANN
-
-## Scale data as standard preparation step;
-## however, it may be more appropriate to run without scaling,
-## as scaling produces out of range values (e.g., negative ages).
-
-drops <- c("num")
-trFeat <- transformedData[ , !(names(transformedData) %in% drops)]
-trDTbl <- as.data.table(transformedData)
-vars2Use <- names(trFeat)
-
-ttFeat <- transformedTest[ , !(names(transformedTest) %in% drops)]
-ttDTbl <- as.data.table(transformedTest)
-
-
-ccMean  <- 
-  trDTbl[
-    , 
-    lapply(
-      .SD, 
-      mean
-    ), 
-    .SDcols = vars2Use
-    ]
-
-ccSigma <- 
-  trDTbl[
-    , 
-    lapply(
-      .SD, 
-      sd
-    ), 
-    .SDcols = vars2Use
-    ]
-
-for (k in seq_along(vars2Use)){  
-  trDTbl[[ vars2Use[k] ]] <- 
-    (trDTbl[[ vars2Use[k] ]] - ccMean[[ vars2Use[k] ]]) / ccSigma[[ vars2Use[k] ]] 
-  
-  ttDTbl[[ vars2Use[k] ]] <- 
-    (ttDTbl[[ vars2Use[k]  ]] - ccMean[[ vars2Use[k] ]]) / ccSigma[[ vars2Use[k] ]]
-}
-
-train.dist <- 
-  dist(
-    trDTbl[
-      , 
-      .SD, 
-      .SDcols = vars2Use
-      ]
-  )
-
-max.dist <- 
-  max(train.dist)
-
-hist(train.dist)
-
-quantile(
-  train.dist, 
-  seq(
-    0, 
-    1, 
-    0.05
-  )
-)
-
-kdtree <- 
-  nn2(
-    trDTbl[, .SD, .SDcols = vars2Use], 
-    k = 6, 
-    eps = 0
-  )  
-
-str(kdtree)
-
-kdtree$nn.idx <- 
-  kdtree$nn.idx[, -1]
-
-head(kdtree$nn.idx)
-
-kdtree$nn.dists <- 
-  kdtree$nn.dists[, -1]
-
-head(kdtree$nn.dists)
-
-voteKD <- 
-  function(
-    kd, 
-    .y,
-    event = TRUE
-  ){ 
-    stopifnot(nrow(kd) == length(.y))
-    apply(
-      kd, 
-      1, 
-      function(x) {
-        sum(.y[x] == event)
-      }
-    )
-  }
-
-yhat <- 
-  voteKD(
-    kdtree$nn.idx, 
-    trDTbl$num, 
-    TRUE
-  )
-
-yhat5 <- 
-  voteKD(
-    kdtree$nn.idx[,1:5], 
-    trDTbl$num, 
-    TRUE
-  )
-
-totalDist <- 
-  rowSums(kdtree$nn.dists)
-
-quantile(totalDist, seq(0, 1, 0.05))
-
-qplot(
-  log10(totalDist), 
-  geom = 'histogram', 
-  bins = 100
-)
-
-trDTbl[
-  which(totalDist>16), 
-  .SD, 
-  .SDcols = vars2Use
-  ]
-
-knn5 <- 
-  knn(
-    trDTbl[
-      , 
-      .SD, 
-      .SDcols = vars2Use
-      ], 
-    ttDTbl[
-      , 
-      .SD, 
-      .SDcols = vars2Use
-      ], 
-    cl = trDTbl$num, 
-    k = 5, 
-    prob = TRUE
-  )
-
-
-ttDTbl[ 
-  , 
-  knn5 := knn5
-  ]
-
-## Prediction matrix
-predMat <- 
-  table(
-    ttDTbl$knn5, 
-    ttDTbl$num
-  )
-
-predMat
-
-votes <- 
-  attr(knn5, 'prob')
-
-sum(votes < 0.66)/length(votes)
-
-table(votes)
-
-##########################################################################
-## Density-based models
-## Source: 4.2.1.1s density v20180620a
-##########################################################################
 
 ##########################################################################
 ## Tree-based models with binary target variable
@@ -952,3 +527,100 @@ varImpPlot(rf1.train)
 ## SVM
 ## Source: svm_e1071 20180620a.R
 ##########################################################################
+
+## Linear
+fmla <- 
+  as.formula(
+    paste0(
+      'factor(num) ~ ', 
+      paste(
+        vars2Use, 
+        collapse = '+'
+      )
+    )
+  )
+
+system.time(
+  svm.tune.lin <- 
+    tune.svm(
+      fmla, 
+      data = tdDT, 
+      type = 'C-classification',
+      kernel = 'linear', 
+      scale = FALSE, 
+      cost = 10^(-6:-2),
+      probability = TRUE,
+      tunecontrol = tune.control(
+        sampling = 'cross', 
+        cross = 5, 
+        best.model = TRUE
+      ),
+      cache = 128
+    )
+)
+
+svm.tune.lin
+svm.tune.lin$performances
+
+bestsvm <- svm.tune.lin$best.model
+
+pred_train <-predict(bestsvm,tdDT)
+mean(pred_train==tdDT$num)
+pred_test <-predict(bestsvm,ttDT)
+mean(pred_test==ttDT$num)
+
+## RBF
+system.time(
+  svm.tune.rbf  <- # Note rbf takes longer to run than lin
+    tune.svm(
+      fmla, 
+      data = tdDT, 
+      type = 'C-classification',
+      kernel = 'radial', 
+      scale = FALSE, 
+      cost = 10^(-5:0), 
+      gamma = 10^(-10:10),
+      probability = TRUE,
+      tunecontrol = tune.control(
+        sampling = 'cross', 
+        cross = 5, 
+        best.model = TRUE
+      ),
+      cache=256
+    )
+)
+
+svm.tune.rbf 
+svm.tune.rbf$performance
+
+bestrbf <- svm.tune.rbf$best.model
+
+pred_train_rbf <-predict(bestrbf,tdDT)
+mean(pred_train_rbf==tdDT$num)
+pred_test_rbf <-predict(bestrbf,ttDT)
+mean(pred_test_rbf==ttDT$num)
+
+##########################################################################
+## Bayesian Classification
+## Source: Marc Paradis, 4.5.1 Bayesian Classification 20180319a
+##########################################################################
+
+bayesModel <- naiveBayes(x=trFeat, y=as.factor(tdDT$num))
+
+str(bayesModel)
+bayesModel
+summary(bayesModel)
+
+bayesModel$apriori
+
+pred <- 
+  predict(
+    object = bayesModel, 
+    newdata = ttDT[,-12]
+  )
+
+table(
+  x = pred, 
+  data = ttDT$num, 
+  dnn = list('predicted', 'actual') )
+
