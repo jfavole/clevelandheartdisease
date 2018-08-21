@@ -328,6 +328,26 @@ cor(linreg.res, transformedData)
 
 vif(linreg)
 
+## Automated feature selection: forward
+forselect <- stepAIC(multlin,
+                     data = transformedData,
+                     direction = 'forward')
+forselect$anova
+
+## Automated feature selection: backward
+backselect <- stepAIC(multlin,
+                      data = transformedData,
+                      direction = 'backward')
+backselect$anova
+
+## Automated feature selection: stepwise
+stepselect <- stepAIC(multlin,
+                      data = transformedData,
+                      direction = 'both')
+stepselect$anova
+
+
+
 ##########################################################################
 ## Classification
 ## 'Num' attribute is integer-valued
