@@ -24,6 +24,11 @@ library(glmnet)
 library(caret)
 library(RANN)
 library(MASS)
+library(faraway)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(Rborist)
 
 #################################################
 ## Define functions
@@ -263,7 +268,7 @@ completedData$age[completedData$age < 30] <- 30
 completedData$trestbps[completedData$trestbps > 170] <- 170
 completedData$chol[completedData$chol > 367] <- 367
 completedData$thalach[completedData$thalach < 89] <- 89
-completeData$oldpeak[completedData$oldpeak > 4.5] <- 4.5
+completedData$oldpeak[completedData$oldpeak > 4.5] <- 4.5
 
 ## Transformations
 
@@ -274,6 +279,30 @@ dropvars <- names(completedData) %in% c("trestbps", "chol")
 transformedData <- completedData[!dropvars]
 
 
+## Outlier management and transformations on test set
+
+aggr_plot <- aggr(td.test, col=c('navyblue', 'lightsalmon'), numbers=TRUE,
+                  sortVars=TRUE, labels=names(td.test),
+                  cex.axis=0.7, gap=3, 
+                  ylab=c("Histogram of missing data", "Pattern"))
+incompletes <- ic(td.test)
+
+tempTest <- mice(td.test, m=5, maxit=50, meth='cart', seed=500)
+stripplot(tempTest, pch=20, cex=1.2)
+completedTest <- complete(tempTest, 1)
+anyDuplicated(completedTest)
+
+completedTest$age[completedTest$age < 30] <- 30
+completedTest$trestbps[completedTest$trestbps > 170] <- 170
+completedTest$chol[completedTest$chol > 367] <- 367
+completedTest$thalach[completedTest$thalach < 89] <- 89
+completedTest$oldpeak[completedTest$oldpeak > 4.5] <- 4.5
+
+completedTest$logtrestbps <- log(completedTest$trestbps)
+completedTest$logchol <- log(completedTest$chol)
+
+dropvarstest <- names(completedTest) %in% c("trestbps", "chol")
+transformedTest <- completedTest[!dropvarstest]
 
 ##########################################################################
 ## Assessing endogeneity and collinearity
@@ -498,6 +527,150 @@ qqline(
   col = 'purple'
 )
 
+## Full data set
+fit.fs <- 
+  lm(
+    num ~ ., 
+    data = transformedData
+  )
+
+summary(fit.fs)
+
+qqnorm(fit.fs$residuals)
+qqline(fit.fs$residuals)
+
+## Kernel regression
+fit.kernel <- 
+  npreg(
+    tydat = transformedData$num, 
+    txdat = transformedData[, -12], 
+    regtype = 'll', 
+    residual = T
+  )	
+
+summary(fit.kernel)
+
+plot( 
+  fit.kernel, 
+  plot.errors.method = 'bootstrap'
+)
+
+## MARS
+fit.mars <- 
+  earth(
+    num ~ ., 
+    data = transformedData, 
+    nfold = 5
+  )
+
+plot(fit.mars)
+summary(fit.mars)
+
+var.imp <- 
+  evimp(fit.mars)
+var.imp
+
+plot(var.imp)
+
+
+##########################################################################
+## Classification
+## Source: Marc Paradis, 3.7.1s glm_example v20180618.r
+##########################################################################
+
+## Create datasets with a binary target variable.
+tdDT <- as.data.table(transformedData)
+tdDT[num > 0, num := 1]
+tdDTdf <- as.data.frame(tdDT)
+
+ttDT <- as.data.table(transformedTest)
+ttDT[num > 0, num := 1]
+ttDTdf <- as.data.frame(ttDT)
+
+## GLM with binary target variable
+
+binglm <- 
+  glm(
+    num ~ ., 
+    data = tdDTdf, 
+    family = binomial
+  )
+
+summary(binglm)
+anova(binglm)
+
+pchisq( ## Very small p-value indicates a poor fit.
+  summary(binglm)$deviance,  
+  summary(binglm)$df.residual
+)
+
+preds.binglm <- 
+  predict(
+    binglm, 
+    newdata = ttDTdf, 
+    type = 'response'
+  )
+
+str(preds.binglm)
+head(preds.binglm)
+summary(preds.binglm)
+
+plot(preds.binglm)
+plot(sort(preds.binglm))
+
+preds.binglm.se <- 
+  predict(
+    binglm, 
+    newdata = ttDTdf, 
+    type = 'response', 
+    se.fit = T
+  )$se.fit
+
+plot(
+  preds.binglm, 
+  preds.binglm.se
+)
+
+## GLM with original target variable
+poisglm <- 
+  glm(
+    num ~ ., 
+    data = transformedData, 
+    family = poisson
+  )
+
+summary(poisglm)
+
+anova(poisglm)
+
+pchisq(
+  summary(poisglm)$deviance,  
+  summary(poisglm)$df.residual
+)
+
+predpois <- 
+  predict(
+    poisglm, 
+    newdata = transformedTest, 
+    type = 'response'
+  )
+
+plot(predpois)
+plot(sort(predpois)) 
+
+predpois.se <- 
+  predict(
+    poisglm, 
+    newdata = transformedTest, 
+    type = 'response', 
+    se.fit = T
+  )$se.fit
+
+plot(
+  predpois, 
+  predpois.se
+)
+
 ##########################################################################
 ## Clustering analysis
 ##########################################################################
@@ -510,17 +683,272 @@ qqline(
 
 ## RANN
 
-## k-means
-set.seed(1)
-unlabeled <- subset(transformedData, select = -num)
-matrix = as.matrix(unlabeled)
-k.max <- 5
-wss <- sapply(1:k.max, 
-              function(k){
-                kmeans(matrix, k, nstart=50, iter.max=20)$tot.withinss})
-plot(1:k.max, wss, type="b", pch=19, frame=FALSE,
-     xlab="Total number of clusters",
-     ylab="Total within-cluster sum of squares")
-kmcluster <- kmeans(matrix, 2, nstart=50)
-plot(unlabeled, col=(c("lightblue", "lightsalmon"))[kmcluster$cluster],
-     main="K-means clustering with two clusters", pch=20, cex=2)
+## Scale data as standard preparation step;
+## however, it may be more appropriate to run without scaling,
+## as scaling produces out of range values (e.g., negative ages).
+
+drops <- c("num")
+trFeat <- transformedData[ , !(names(transformedData) %in% drops)]
+trDTbl <- as.data.table(transformedData)
+vars2Use <- names(trFeat)
+
+ttFeat <- transformedTest[ , !(names(transformedTest) %in% drops)]
+ttDTbl <- as.data.table(transformedTest)
+
+
+ccMean  <- 
+  trDTbl[
+    , 
+    lapply(
+      .SD, 
+      mean
+    ), 
+    .SDcols = vars2Use
+    ]
+
+ccSigma <- 
+  trDTbl[
+    , 
+    lapply(
+      .SD, 
+      sd
+    ), 
+    .SDcols = vars2Use
+    ]
+
+for (k in seq_along(vars2Use)){  
+  trDTbl[[ vars2Use[k] ]] <- 
+    (trDTbl[[ vars2Use[k] ]] - ccMean[[ vars2Use[k] ]]) / ccSigma[[ vars2Use[k] ]] 
+  
+  ttDTbl[[ vars2Use[k] ]] <- 
+    (ttDTbl[[ vars2Use[k]  ]] - ccMean[[ vars2Use[k] ]]) / ccSigma[[ vars2Use[k] ]]
+}
+
+train.dist <- 
+  dist(
+    trDTbl[
+      , 
+      .SD, 
+      .SDcols = vars2Use
+      ]
+  )
+
+max.dist <- 
+  max(train.dist)
+
+hist(train.dist)
+
+quantile(
+  train.dist, 
+  seq(
+    0, 
+    1, 
+    0.05
+  )
+)
+
+kdtree <- 
+  nn2(
+    trDTbl[, .SD, .SDcols = vars2Use], 
+    k = 6, 
+    eps = 0
+  )  
+
+str(kdtree)
+
+kdtree$nn.idx <- 
+  kdtree$nn.idx[, -1]
+
+head(kdtree$nn.idx)
+
+kdtree$nn.dists <- 
+  kdtree$nn.dists[, -1]
+
+head(kdtree$nn.dists)
+
+voteKD <- 
+  function(
+    kd, 
+    .y,
+    event = TRUE
+  ){ 
+    stopifnot(nrow(kd) == length(.y))
+    apply(
+      kd, 
+      1, 
+      function(x) {
+        sum(.y[x] == event)
+      }
+    )
+  }
+
+yhat <- 
+  voteKD(
+    kdtree$nn.idx, 
+    trDTbl$num, 
+    TRUE
+  )
+
+yhat5 <- 
+  voteKD(
+    kdtree$nn.idx[,1:5], 
+    trDTbl$num, 
+    TRUE
+  )
+
+totalDist <- 
+  rowSums(kdtree$nn.dists)
+
+quantile(totalDist, seq(0, 1, 0.05))
+
+qplot(
+  log10(totalDist), 
+  geom = 'histogram', 
+  bins = 100
+)
+
+trDTbl[
+  which(totalDist>16), 
+  .SD, 
+  .SDcols = vars2Use
+  ]
+
+knn5 <- 
+  knn(
+    trDTbl[
+      , 
+      .SD, 
+      .SDcols = vars2Use
+      ], 
+    ttDTbl[
+      , 
+      .SD, 
+      .SDcols = vars2Use
+      ], 
+    cl = trDTbl$num, 
+    k = 5, 
+    prob = TRUE
+  )
+
+
+ttDTbl[ 
+  , 
+  knn5 := knn5
+  ]
+
+## Prediction matrix
+predMat <- 
+  table(
+    ttDTbl$knn5, 
+    ttDTbl$num
+  )
+
+predMat
+
+votes <- 
+  attr(knn5, 'prob')
+
+sum(votes < 0.66)/length(votes)
+
+table(votes)
+
+##########################################################################
+## Density-based models
+## Source: 4.2.1.1s density v20180620a
+##########################################################################
+
+##########################################################################
+## Tree-based models with binary target variable
+## Source: 4.3.1s trees v20180620a
+##########################################################################
+
+fmla <- 
+  as.formula(
+    paste0(
+      'factor(num) ~ ', 
+      paste(
+        vars2Use, 
+        collapse = '+'
+      )
+    )
+  )
+
+rp1.train <- 
+  rpart(
+    fmla, 
+    tdDT, 
+    method = 'class', 
+    control = rpart.control(
+      minsplit = 20,  
+      cp = 0.01 
+    )
+  )
+
+rp1.train
+summary(rp1.train)
+plot(rp1.train)
+text(rp1.train)
+
+rpart.plot(rp1.train)
+
+yhat.rp1.train <- 
+  predict(
+    rp1.train,  
+    newdata = tdDT, 
+    type = 'class' 
+  )
+
+(twoByTwo.rp1.train <- 
+    table(
+      tdDT$num, 
+      yhat.rp1.train
+    ))
+
+
+sum(diag(twoByTwo.rp1.train)) / sum(twoByTwo.rp1.train) 
+
+yhat.rp1.test <- 
+  predict(
+    rp1.train, 
+    newdata = ttDT, 
+    type = 'class'
+  )
+
+# Confusion Matrix
+(
+  twoByTwo.rp1.test <- 
+    table(
+      y = ttDT$num, 
+      predicted = yhat.rp1.test
+    )
+)
+
+# Accuracy ((TP + TN) / Total)
+sum(diag(twoByTwo.rp1.test)) / sum(twoByTwo.rp1.test)
+
+
+##########################################################################
+## Random Forest
+## Source: 4.3.1s trees v20180620a
+##########################################################################
+system.time( # Captures the length of time that the enclosed fxn takes to run
+  rf1.train <- 
+    randomForest(
+      tdDT[, .SD, .SDcols = vars2Use], # data.table notation
+      factor(tdDT$num),
+      ntree = 100, # Hyperparameter: Nbr of trees in forest
+      maxnodes = 16, # Hyperparameter: Max nbr of terminal nodes (leaves or 
+      # depth)
+      nodesize = 20, # Hyperparameter: minimum size of terminal nodes
+      importance = TRUE # Collect the stats for variable importance
+    )
+)
+
+rf1.train
+summary(rf1.train)
+varImpPlot(rf1.train) 
+
+##########################################################################
+## SVM
+## Source: svm_e1071 20180620a.R
+##########################################################################
