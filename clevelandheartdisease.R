@@ -10,7 +10,6 @@
 library(data.table)
 library(Hmisc)
 library(np)
-library(earth)
 library(stringr)
 library(e1071)
 library(VIM)
@@ -18,12 +17,8 @@ library(car)
 library(mice)
 library(psych)
 library(gmodels)
-library(clv)
-library(cluster)
 library(factoextra)
-library(glmnet)
 library(caret)
-library(RANN)
 library(MASS)
 library(faraway)
 library(rpart)
@@ -32,6 +27,8 @@ library(randomForest)
 library(fpc)
 library(plm)
 library(systemfit)
+library(xgboost)
+library(pROC)
 
 
 #################################################
@@ -148,8 +145,6 @@ kendallsCorr <-
   }
 
 
-
-
 #################################################
 ## EDA
 #################################################
@@ -262,8 +257,15 @@ print("Kendall's corr for num/slope")
 kendallsCorr(categoricals$slope)
 print("Kendall's corr for num/slope")
 kendallsCorr(categoricals$thal)
+print("Kendall's corr for num/ca") # Numeric but not continuous
+kendallsCorr(numerics$ca)
 
-
+cor(numerics$age, categoricals$num)
+cor(numerics$trestbps, categoricals$num)
+cor(numerics$chol, categoricals$num)
+cor(numerics$thalach, categoricals$num)
+cor(numerics$oldpeak, categoricals$num)
+cor(numerics$ca, categoricals$num) # Try, just to explore
 
 ##########################################################################
 ## Data modifications
@@ -329,19 +331,19 @@ cor(linreg.res, transformedData)
 vif(linreg)
 
 ## Automated feature selection: forward
-forselect <- stepAIC(multlin,
+forselect <- stepAIC(linreg,
                      data = transformedData,
                      direction = 'forward')
 forselect$anova
 
 ## Automated feature selection: backward
-backselect <- stepAIC(multlin,
+backselect <- stepAIC(linreg,
                       data = transformedData,
                       direction = 'backward')
 backselect$anova
 
 ## Automated feature selection: stepwise
-stepselect <- stepAIC(multlin,
+stepselect <- stepAIC(linreg,
                       data = transformedData,
                       direction = 'both')
 stepselect$anova
@@ -367,7 +369,17 @@ ttDT <- as.data.table(transformedTest)
 ttDT[num > 0, num := 1]
 ttDTdf <- as.data.frame(ttDT)
 
-## GLM with binary target variable
+## Autoselect subset with binary target variable
+keepers <- c("num", "cp", "restecg", "thalach", "exang", "oldpeak", "ca", "thal")
+subs <- transformedData[keepers]
+subsDT <- as.data.table(subs)
+subsDT[num > 0, num := 1]
+
+substt <- transformedTest[keepers]
+subsTEST <- as.data.table(substt)
+subsTEST[num > 0, num := 1]
+
+## GLM with binary target variable, all variables
 
 binglm <- 
   glm(
@@ -408,54 +420,62 @@ plot(
 ## Confusion matrix
 binglm.pred.2 = rep("0", 76)
 binglm.pred.2[probs.binglm > .5] = "1"
-table(binglm.pred.2, ttDT$num)
+binglm.test <- table(binglm.pred.2, ttDT$num)
+binglm.test
 
+# Accuracy ((TP + TN) / Total)
+accBINGLM <- sum(diag(binglm.test)) / sum(binglm.test)
+accBINGLM
 
-## GLM with original target variable
-poisglm <- 
+# AUC
+aucBINGLM <- auc(ttDT$num, probs.binglm)
+aucBINGLM
+
+ROCbinglm <- roc(ttDT$num, probs.binglm)
+plot(ROCbinglm)
+
+## Autoselected subset
+
+binglmsub <- 
   glm(
     num ~ ., 
-    data = transformedData, 
-    family = poisson
+    data = subsDT, 
+    family = binomial
   )
 
-summary(poisglm)
+summary(binglmsub)
 
-anova(poisglm)
-
-pchisq(
-  summary(poisglm)$deviance,  
-  summary(poisglm)$df.residual
-)
-
-predpois <- 
+probs.binglmsub <- 
   predict(
-    poisglm, 
-    newdata = transformedTest, 
+    binglmsub, 
+    newdata = subsTEST, 
     type = 'response'
   )
 
-plot(predpois)
-plot(sort(predpois)) 
+## Confusion matrix
+binglmsub.pred.2 = rep("0", 76)
+binglmsub.pred.2[probs.binglmsub > .5] = "1"
+binglmsub.test <- table(binglmsub.pred.2, subsTEST$num)
+binglmsub.test
 
-predpois.se <- 
-  predict(
-    poisglm, 
-    newdata = transformedTest, 
-    type = 'response', 
-    se.fit = T
-  )$se.fit
+# Accuracy ((TP + TN) / Total)
+accBINGLMsub <- sum(diag(binglmsub.test)) / sum(binglmsub.test)
+accBINGLMsub
 
-plot(
-  predpois, 
-  predpois.se
-)
+# AUC
+aucBINGLMsub <- auc(subsTEST$num, probs.binglmsub)
+aucBINGLMsub
 
+ROCbinglmsub <- roc(subsTEST$num, probs.binglmsub)
+plot(ROCbinglmsub)
 
 ##########################################################################
 ## Tree-based models with binary target variable
 ## Source: 4.3.1s trees v20180620a
 ##########################################################################
+set.seed(1)
+
+vars2Use <- names(tdDT[,-12])
 
 fmla <- 
   as.formula(
@@ -486,22 +506,6 @@ text(rp1.train)
 
 rpart.plot(rp1.train)
 
-yhat.rp1.train <- 
-  predict(
-    rp1.train,  
-    newdata = tdDT, 
-    type = 'class' 
-  )
-
-(twoByTwo.rp1.train <- 
-    table(
-      tdDT$num, 
-      yhat.rp1.train
-    ))
-
-
-sum(diag(twoByTwo.rp1.train)) / sum(twoByTwo.rp1.train) 
-
 yhat.rp1.test <- 
   predict(
     rp1.train, 
@@ -519,13 +523,15 @@ yhat.rp1.test <-
 )
 
 # Accuracy ((TP + TN) / Total)
-sum(diag(twoByTwo.rp1.test)) / sum(twoByTwo.rp1.test)
-
+accTree <- sum(diag(twoByTwo.rp1.test)) / sum(twoByTwo.rp1.test)
+accTree
 
 ##########################################################################
 ## Random Forest
 ## Source: 4.3.1s trees v20180620a
 ##########################################################################
+set.seed(1)
+
 system.time( # Captures the length of time that the enclosed fxn takes to run
   rf1.train <- 
     randomForest(
@@ -542,6 +548,65 @@ system.time( # Captures the length of time that the enclosed fxn takes to run
 rf1.train
 summary(rf1.train)
 varImpPlot(rf1.train) 
+
+rf.preds <- predict(rf1.train, ttDT, type="response")
+
+# Confusion Matrix
+(
+  rd.confmat <- 
+    table(
+      y = ttDT$num, 
+      predicted = rf.preds
+    )
+)
+
+# Accuracy ((TP + TN) / Total)
+accRF <- sum(diag(rd.confmat)) / sum(rd.confmat)
+accRF
+
+## Boosted model
+
+dtrain <- 
+  xgb.DMatrix( 
+    data = as.matrix(tdDT[, .SD, .SDcols = vars2Use]),
+    label = tdDT$num
+  )
+
+system.time(
+  xgb5.train <- 
+    xgboost(
+      data = dtrain, 
+      nrounds = 5, 
+      nthread = 3,
+      metrics = list("rmse","auc", "error"),
+      max_depth = 8, 
+      eta = 1,  
+      objective = "binary:logistic",
+      prediction = TRUE
+    )
+)
+
+xgb.importance(
+  feature_names = vars2Use,
+  model = xgb5.train
+)
+
+yhat.xgb.test <- 
+  predict(
+    xgb5.train, 
+    newdata = xgb.DMatrix(
+      data = as.matrix(
+        ttDT[, .SD, .SDcols = vars2Use]
+      )
+    )
+  )
+
+xgb.pred.2 = rep("0", 76)
+xgb.pred.2[yhat.xgb.test > .5] = "1"
+(xgb.test <- table(xgb.pred.2, ttDT$num))
+
+accXGB <- sum(diag(xgb.test)) / sum(xgb.test)
+accXGB
 
 ##########################################################################
 ## SVM
@@ -584,14 +649,24 @@ svm.tune.lin$performances
 
 bestsvm <- svm.tune.lin$best.model
 
-pred_train <-predict(bestsvm,tdDT)
-mean(pred_train==tdDT$num)
 pred_test <-predict(bestsvm,ttDT)
 mean(pred_test==ttDT$num)
 
+## Confusion matrix
+(
+  svm.confmat <- 
+    table(
+      y = ttDT$num, 
+      predicted = pred_test
+    )
+)
+
+accSVM <- sum(diag(svm.confmat)) / sum(svm.confmat)
+accSVM
+
 ## RBF
 system.time(
-  svm.tune.rbf  <- # Note rbf takes longer to run than lin
+  svm.tune.rbf  <- 
     tune.svm(
       fmla, 
       data = tdDT, 
@@ -620,10 +695,24 @@ mean(pred_train_rbf==tdDT$num)
 pred_test_rbf <-predict(bestrbf,ttDT)
 mean(pred_test_rbf==ttDT$num)
 
+## Confusion matrix
+(
+  rbf.confmat <- 
+    table(
+      y = ttDT$num, 
+      predicted = pred_test_rbf
+    )
+)
+
+accRBF <- sum(diag(rbf.confmat)) / sum(rbf.confmat)
+accRBF
+
 ##########################################################################
 ## Bayesian Classification
 ## Source: Marc Paradis, 4.5.1 Bayesian Classification 20180319a
 ##########################################################################
+
+trFeat <- tdDT[,-12]
 
 bayesModel <- naiveBayes(x=trFeat, y=as.factor(tdDT$num))
 
@@ -639,8 +728,27 @@ pred <-
     newdata = ttDT[,-12]
   )
 
-table(
+nb.confmat <- table(
   x = pred, 
   data = ttDT$num, 
   dnn = list('predicted', 'actual') )
+nb.confmat
+
+accNB <- sum(diag(nb.confmat)) / sum(nb.confmat)
+accNB
+
+##########################################################################
+## Compare
+##########################################################################
+
+accBINGLM
+accBINGLMsub
+accTree
+accRF
+accXGB
+accSVM
+accRBF
+accNB
+
+
 
